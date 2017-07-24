@@ -71,6 +71,10 @@ type variableProperties struct {
 			Cflags []string
 		}
 
+		Uses_media_extensions struct {
+			Cflags []string
+		}
+
 		// treble is true when a build is a Treble compliant device.  This is automatically set when
 		// a build is shipped with Android O, but can be overriden.  This controls such things as
 		// the sepolicy split and enabling the Treble linker namespaces.
@@ -145,6 +149,7 @@ type productVariables struct {
 	Has_legacy_camera_hal1     *bool `json:",omitempty"`
 	Treble                     *bool `json:",omitempty"`
 	Pdk                        *bool `json:",omitempty"`
+	Uses_media_extensions      *bool `json:",omitempty"`
 	Libart_img_base            *string `json:",omitempty"`
 
 	VendorPath *string `json:",omitempty"`
