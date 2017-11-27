@@ -97,20 +97,23 @@ type PathDeps struct {
 }
 
 type Flags struct {
-	GlobalFlags []string // Flags that apply to C, C++, and assembly source files
-	ArFlags     []string // Flags that apply to ar
-	AsFlags     []string // Flags that apply to assembly source files
-	CFlags      []string // Flags that apply to C and C++ source files
-	ConlyFlags  []string // Flags that apply to C source files
-	CppFlags    []string // Flags that apply to C++ source files
-	YaccFlags   []string // Flags that apply to Yacc source files
-	protoFlags  []string // Flags that apply to proto source files
-	aidlFlags   []string // Flags that apply to aidl source files
-	LdFlags     []string // Flags that apply to linker command lines
-	libFlags    []string // Flags to add libraries early to the link order
-	TidyFlags   []string // Flags that apply to clang-tidy
-	SAbiFlags   []string // Flags that apply to header-abi-dumper
-	YasmFlags   []string // Flags that apply to yasm assembly source files
+	GlobalFlags     []string // Flags that apply to C, C++, and assembly source files
+	ArFlags         []string // Flags that apply to ar
+	AsFlags         []string // Flags that apply to assembly source files
+	CFlags          []string // Flags that apply to C and C++ source files
+	ToolingCFlags   []string // Flags that apply to C and C++ source files parsed by clang LibTooling tools
+	ConlyFlags      []string // Flags that apply to C source files
+	CppFlags        []string // Flags that apply to C++ source files
+	ToolingCppFlags []string // Flags that apply to C++ source files parsed by clang LibTooling tools
+	YaccFlags       []string // Flags that apply to Yacc source files
+	protoFlags      []string // Flags that apply to proto source files
+	aidlFlags       []string // Flags that apply to aidl source files
+	rsFlags         []string // Flags that apply to renderscript source files
+	LdFlags         []string // Flags that apply to linker command lines
+	libFlags        []string // Flags to add libraries early to the link order
+	TidyFlags       []string // Flags that apply to clang-tidy
+	SAbiFlags       []string // Flags that apply to header-abi-dumper
+	YasmFlags       []string // Flags that apply to yasm assembly source files
 
 	// Global include flags that apply to C, C++, and assembly source files
 	// These must be after any module include flags, which will be in GlobalFlags.
@@ -506,9 +509,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.coverage != nil {
 		flags = c.coverage.flags(ctx, flags)
 	}
-	if c.sabi != nil {
-		flags = c.sabi.flags(ctx, flags)
-	}
 	for _, feature := range c.features {
 		flags = feature.flags(ctx, flags)
 	}
@@ -526,7 +526,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 	flags.GlobalFlags = append(flags.GlobalFlags, deps.Flags...)
 	c.flags = flags
-
+	// We need access to all the flags seen by a source file.
+	if c.sabi != nil {
+		flags = c.sabi.flags(ctx, flags)
+	}
 	// Optimization to reduce size of build.ninja
 	// Replace the long list of flags for each file with a module-local variable
 	ctx.Variable(pctx, "cflags", strings.Join(flags.CFlags, " "))
@@ -906,6 +909,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				} else {
 					ctx.ModuleErrorf("module %q is not a gensrcs or genrule", name)
 				}
+				// Support exported headers from a generated_sources dependency
+				fallthrough
 			case genHeaderDepTag, genHeaderExportDepTag:
 				if genRule, ok := m.(genrule.SourceFileGenerator); ok {
 					depPaths.GeneratedHeaders = append(depPaths.GeneratedHeaders,
@@ -950,7 +955,10 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 		if tag == reuseObjTag {
 			if l, ok := cc.compiler.(libraryInterface); ok {
-				depPaths.Objs = depPaths.Objs.Append(l.reuseObjs())
+				objs, flags, deps := l.reuseObjs()
+				depPaths.Objs = depPaths.Objs.Append(objs)
+				depPaths.ReexportedFlags = append(depPaths.ReexportedFlags, flags...)
+				depPaths.ReexportedFlagsDeps = append(depPaths.ReexportedFlagsDeps, deps...)
 				return
 			}
 		}
@@ -1055,6 +1063,9 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			*depPtr = append(*depPtr, dep.Path())
 		}
 	})
+
+	// Dedup exported flags from dependencies
+	depPaths.Flags = firstUniqueElements(depPaths.Flags)
 
 	return depPaths
 }
@@ -1177,6 +1188,23 @@ func vendorMutator(mctx android.BottomUpMutatorContext) {
 	}
 }
 
+// firstUniqueElements returns all unique elements of a slice, keeping the first copy of each
+// modifies the slice contents in place, and returns a subslice of the original slice
+func firstUniqueElements(list []string) []string {
+	k := 0
+outer:
+	for i := 0; i < len(list); i++ {
+		for j := 0; j < k; j++ {
+			if list[i] == list[j] {
+				continue outer
+			}
+		}
+		list[k] = list[i]
+		k++
+	}
+	return list[:k]
+}
+
 // lastUniqueElements returns all unique elements of a slice, keeping the last copy of each
 // modifies the slice contents in place, and returns a subslice of the original slice
 func lastUniqueElements(list []string) []string {
@@ -1193,6 +1221,13 @@ func lastUniqueElements(list []string) []string {
 		totalSkip += skip
 	}
 	return list[totalSkip:]
+}
+
+func getCurrentNdkPrebuiltVersion(ctx DepsContext) string {
+	if ctx.AConfig().PlatformSdkVersionInt() > config.NdkMaxPrebuiltVersionInt {
+		return strconv.Itoa(config.NdkMaxPrebuiltVersionInt)
+	}
+	return ctx.AConfig().PlatformSdkVersion()
 }
 
 var Bool = proptools.Bool

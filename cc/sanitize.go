@@ -16,6 +16,7 @@ package cc
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -24,17 +25,21 @@ import (
 	"android/soong/cc/config"
 )
 
-const (
-	asanCflags  = "-fno-omit-frame-pointer"
-	asanLdflags = "-Wl,-u,__asan_preinit"
-	asanLibs    = "libasan"
+var (
+	// Any C flags added by sanitizer which libTooling tools may not
+	// understand also need to be added to ClangLibToolingUnknownCflags in
+	// cc/config/clang.go
 
-	cfiCflags = "-flto -fsanitize-cfi-cross-dso -fvisibility=default " +
-		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blacklist.txt"
+	asanCflags  = []string{"-fno-omit-frame-pointer"}
+	asanLdflags = []string{"-Wl,-u,__asan_preinit"}
+	asanLibs    = []string{"libasan"}
+
+	cfiCflags = []string{"-flto", "-fsanitize-cfi-cross-dso", "-fvisibility=default",
+		"-fsanitize-blacklist=external/compiler-rt/lib/cfi/cfi_blacklist.txt"}
 	// FIXME: revert the __cfi_check flag when clang is updated to r280031.
-	cfiLdflags = "-flto -fsanitize-cfi-cross-dso -fsanitize=cfi " +
-		"-Wl,-plugin-opt,O1 -Wl,-export-dynamic-symbol=__cfi_check"
-	cfiArflags = "--plugin ${config.ClangBin}/../lib64/LLVMgold.so"
+	cfiLdflags = []string{"-flto", "-fsanitize-cfi-cross-dso", "-fsanitize=cfi",
+		"-Wl,-plugin-opt,O1 -Wl,-export-dynamic-symbol=__cfi_check"}
+	cfiArflags = []string{"--plugin ${config.ClangBin}/../lib64/LLVMgold.so"}
 )
 
 type sanitizerType int
@@ -102,6 +107,8 @@ type SanitizeProperties struct {
 
 type sanitize struct {
 	Properties SanitizeProperties
+
+	runtimeLibrary string
 }
 
 func (sanitize *sanitize) props() []interface{} {
@@ -186,6 +193,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Diag.Cfi = nil
 	}
 
+	// Also disable CFI if ASAN is enabled.
+	if Bool(s.Address) {
+		s.Cfi = nil
+		s.Diag.Cfi = nil
+	}
+
 	if ctx.staticBinary() {
 		s.Address = nil
 		s.Coverage = nil
@@ -222,7 +235,7 @@ func (sanitize *sanitize) deps(ctx BaseModuleContext, deps Deps) Deps {
 
 	if ctx.Device() {
 		if Bool(sanitize.Properties.Sanitize.Address) {
-			deps.StaticLibs = append(deps.StaticLibs, asanLibs)
+			deps.StaticLibs = append(deps.StaticLibs, asanLibs...)
 		}
 		if Bool(sanitize.Properties.Sanitize.Address) || Bool(sanitize.Properties.Sanitize.Thread) {
 			deps.SharedLibs = append(deps.SharedLibs, "libdl")
@@ -291,8 +304,8 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			// TODO: put in flags?
 			flags.RequiredInstructionSet = "arm"
 		}
-		flags.CFlags = append(flags.CFlags, asanCflags)
-		flags.LdFlags = append(flags.LdFlags, asanLdflags)
+		flags.CFlags = append(flags.CFlags, asanCflags...)
+		flags.LdFlags = append(flags.LdFlags, asanLdflags...)
 
 		if ctx.Host() {
 			// -nodefaultlibs (provided with libc++) prevents the driver from linking
@@ -328,17 +341,12 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.LdFlags = append(flags.LdFlags, "-march=armv7-a")
 		}
 		sanitizers = append(sanitizers, "cfi")
-		flags.CFlags = append(flags.CFlags, cfiCflags)
-		flags.LdFlags = append(flags.LdFlags, cfiLdflags)
-		flags.ArFlags = append(flags.ArFlags, cfiArflags)
+		flags.CFlags = append(flags.CFlags, cfiCflags...)
+		flags.LdFlags = append(flags.LdFlags, cfiLdflags...)
+		flags.ArFlags = append(flags.ArFlags, cfiArflags...)
 		if Bool(sanitize.Properties.Sanitize.Diag.Cfi) {
 			diagSanitizers = append(diagSanitizers, "cfi")
 		}
-	}
-
-	if sanitize.Properties.Sanitize.Recover != nil {
-		flags.CFlags = append(flags.CFlags, "-fsanitize-recover="+
-			strings.Join(sanitize.Properties.Sanitize.Recover, ","))
 	}
 
 	if len(sanitizers) > 0 {
@@ -364,6 +372,11 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	}
 	// FIXME: enable RTTI if diag + (cfi or vptr)
 
+	if sanitize.Properties.Sanitize.Recover != nil {
+		flags.CFlags = append(flags.CFlags, "-fsanitize-recover="+
+			strings.Join(sanitize.Properties.Sanitize.Recover, ","))
+	}
+
 	// Link a runtime library if needed.
 	runtimeLibrary := ""
 	if Bool(sanitize.Properties.Sanitize.Address) {
@@ -374,7 +387,10 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 
 	// ASan runtime library must be the first in the link order.
 	if runtimeLibrary != "" {
-		flags.libFlags = append([]string{"${config.ClangAsanLibDir}/" + runtimeLibrary}, flags.libFlags...)
+		flags.libFlags = append([]string{
+			"${config.ClangAsanLibDir}/" + runtimeLibrary + ctx.toolchain().ShlibSuffix(),
+		}, flags.libFlags...)
+		sanitize.runtimeLibrary = runtimeLibrary
 	}
 
 	blacklist := android.OptionalPathForModuleSrc(ctx, sanitize.Properties.Sanitize.Blacklist)
@@ -384,6 +400,16 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 	}
 
 	return flags
+}
+
+func (sanitize *sanitize) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkData) {
+	ret.Extra = append(ret.Extra, func(w io.Writer, outputFile android.Path) error {
+		if sanitize.runtimeLibrary != "" {
+			fmt.Fprintln(w, "LOCAL_SHARED_LIBRARIES += "+sanitize.runtimeLibrary)
+		}
+
+		return nil
+	})
 }
 
 func (sanitize *sanitize) inSanitizerDir() bool {
