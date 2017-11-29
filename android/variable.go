@@ -118,6 +118,10 @@ type variableProperties struct {
 		Needs_text_relocations struct {
 			Cppflags []string
 		}
+
+		Qcom_bsp_legacy struct {
+			Cflags []string
+         	}
 	} `android:"arch_variant"`
 }
 
@@ -168,7 +172,7 @@ type productVariables struct {
 	Pdk                        *bool `json:",omitempty"`
 	Uses_media_extensions      *bool `json:",omitempty"`
 	Libart_img_base            *string `json:",omitempty"`
-        
+        Qcom_bsp_legacy            *bool `json:",omitempty"
 
 	VendorPath *string `json:",omitempty"`
 
