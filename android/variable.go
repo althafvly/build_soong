@@ -106,6 +106,10 @@ type variableProperties struct {
 		Pdk struct {
 			Enabled *bool
 		}
+
+		Has_legacy_camera_hal1 struct {
+			Cflags []string
+		}
 	} `android:"arch_variant"`
 }
 
@@ -156,6 +160,7 @@ type productVariables struct {
 	Pdk                        *bool `json:",omitempty"`
 	Uses_media_extensions      *bool `json:",omitempty"`
 	Libart_img_base            *string `json:",omitempty"`
+        Has_legacy_camera_hal1     *bool `json:",omitempty"`
 
 	VendorPath *string `json:",omitempty"`
 
