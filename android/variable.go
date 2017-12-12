@@ -96,7 +96,13 @@ type variableProperties struct {
 		Pdk struct {
 			Enabled *bool
 		}
+                Has_legacy_camera_hal1 struct {
+			Cflags []string
+}
 
+		Uses_media_extensions struct {
+			Cflags []string
+		}
 		// include Lineage variables
 		Lineage android.Product_variables
 	} `android:"arch_variant"`
@@ -170,7 +176,8 @@ type productVariables struct {
 	BtConfigIncludeDir *string `json:",omitempty"`
 
 	Override_rs_driver *string `json:",omitempty"`
-
+        Has_legacy_camera_hal1     *bool `json:",omitempty"`
+        Uses_media_extensions      *bool `json:",omitempty"`
 	DeviceKernelHeaders []string `json:",omitempty"`
 
 	// include Lineage variables
